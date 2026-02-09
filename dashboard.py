@@ -13,10 +13,10 @@ THRESHOLD = 75.0
 ALPHA = 0.20 
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-# Subimos a 5 segundos para dar tiempo a que los 6 pares respondan cómodamente
+# Autorefresh cada 5 segundos
 st_autorefresh(interval=5000, key="quantum_v5_final")
 
-# Memoria persistente para Scores y Precios (Evita que desaparezcan los pares)
+# Memoria persistente para Scores y Precios
 if 'score_history' not in st.session_state:
     st.session_state.score_history = {pair: 50.0 for pair in PAIRS}
 if 'price_memory' not in st.session_state:
@@ -32,6 +32,7 @@ if 'session' not in st.session_state:
 st.markdown("""
     <style>
     .main { background-color: #06090f; color: #ffffff; }
+    .stApp { background-color: #06090f; }
     .crypto-card {
         background: rgba(16, 22, 35, 0.9);
         border-radius: 12px;
@@ -48,39 +49,57 @@ st.markdown("""
 
 def fetch_data(symbol, idx):
     session = st.session_state.session
-    try:
-        # Petición de precio (Timeout corto para no trabar el dashboard)
-        p_res = session.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=1.5).json()
-        curr_price = float(p_res['price'])
-        
-        # Petición de Klines
-        k_res = session.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30", timeout=1.5).json()
-        df = pd.DataFrame(k_res, columns=["ot","open","high","low","close","vol","ct","qv","tr","tbb","tbq","i"]).apply(pd.to_numeric)
-        
-        # Cálculos Técnicos
-        v_smooth = df['vol'].rolling(3).mean().iloc[-1]
-        v_mean = df['vol'].rolling(20).mean().iloc[-1]
-        z_vol = (v_smooth - v_mean) / (df['vol'].rolling(20).std().iloc[-1] + 1e-9)
-        
-        direction = "UP" if curr_price > df['open'].iloc[-1] else "DOWN"
-        raw_score = 50 + (np.clip(z_vol, -2, 2) * 15) + (20 if direction == "UP" else -15)
-        
-        # Suavizado progresivo
-        prev_score = st.session_state.score_history[symbol]
-        smoothed_score = (raw_score * ALPHA) + (prev_score * (1 - ALPHA))
-        
-        # Guardar en memoria
-        st.session_state.score_history[symbol] = smoothed_score
-        st.session_state.price_memory[symbol] = curr_price
-        
-        # Métricas del Radar
-        metrics = [smoothed_score, 50 + (np.sin(time.time()+idx)*10), 55 + (np.random.randn()), 50 + (z_vol*15), 85 if direction=="UP" else 35]
-        st.session_state.metric_memory[symbol] = metrics
-        
-        return curr_price, smoothed_score, direction, metrics
-
-    except Exception as e:
-        # Si falla, devolvemos el último dato guardado para que el par no desaparezca
+    # Lista de endpoints para rotar si uno falla en la nube
+    endpoints = [
+        f"https://api1.binance.com/api/v3",
+        f"https://api2.binance.com/api/v3",
+        f"https://api3.binance.com/api/v3",
+        f"https://api.binance.com/api/v3"
+    ]
+    
+    success = False
+    curr_price = st.session_state.price_memory[symbol]
+    
+    for base_url in endpoints:
+        try:
+            # Petición de precio con timeout de 3 seg para estabilidad en la nube
+            p_res = session.get(f"{base_url}/ticker/price?symbol={symbol}", timeout=3.0).json()
+            curr_price = float(p_res['price'])
+            
+            # Petición de Klines
+            k_res = session.get(f"{base_url}/klines?symbol={symbol}&interval=1m&limit=30", timeout=3.0).json()
+            df = pd.DataFrame(k_res, columns=["ot","open","high","low","close","vol","ct","qv","tr","tbb","tbq","i"]).apply(pd.to_numeric)
+            
+            # Cálculos Técnicos
+            v_smooth = df['vol'].rolling(3).mean().iloc[-1]
+            v_mean = df['vol'].rolling(20).mean().iloc[-1]
+            z_vol = (v_smooth - v_mean) / (df['vol'].rolling(20).std().iloc[-1] + 1e-9)
+            
+            direction = "UP" if curr_price > df['open'].iloc[-1] else "DOWN"
+            raw_score = 50 + (np.clip(z_vol, -2, 2) * 15) + (20 if direction == "UP" else -15)
+            
+            # Suavizado progresivo
+            prev_score = st.session_state.score_history[symbol]
+            smoothed_score = (raw_score * ALPHA) + (prev_score * (1 - ALPHA))
+            
+            # Guardar en memoria
+            st.session_state.score_history[symbol] = smoothed_score
+            st.session_state.price_memory[symbol] = curr_price
+            
+            # Métricas del Radar
+            metrics = [smoothed_score, 50 + (np.sin(time.time()+idx)*10), 55 + (np.random.randn()), 50 + (z_vol*15), 85 if direction=="UP" else 35]
+            st.session_state.metric_memory[symbol] = metrics
+            
+            success = True
+            break # Si funciona, salimos del bucle de endpoints
+            
+        except:
+            continue # Si falla este endpoint, prueba el siguiente
+            
+    if success:
+        return curr_price, st.session_state.score_history[symbol], direction, st.session_state.metric_memory[symbol]
+    else:
+        # Si fallan todos, usamos la memoria
         return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "WAIT", st.session_state.metric_memory[symbol]
 
 # --- UI ---
@@ -91,12 +110,12 @@ cols = st.columns(3)
 for i, sym in enumerate(PAIRS):
     price, score, trend, metrics = fetch_data(sym, i)
     
-    # Si es el primer arranque y no hay datos, mostramos cargando
-    if price == 0: 
-        with cols[i % 3]: st.write(f"Conectando {sym}...")
-        continue
-    
     with cols[i % 3]:
+        # Si es el primer arranque y no hay datos, mostramos cargando
+        if price == 0: 
+            st.markdown(f"""<div class="crypto-card"><span class="pair-name">{sym}</span><br>Conectando...</div>""", unsafe_allow_html=True)
+            continue
+            
         is_sniper = score >= THRESHOLD
         t_color = "#00ff88" if is_sniper else "#00fbff"
         
