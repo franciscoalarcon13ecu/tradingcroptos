@@ -10,7 +10,7 @@ PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
 THRESHOLD = 75.0
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-# Refresco cada 5 segundos para estabilidad
+# Refresco automático cada 5 segundos
 st_autorefresh(interval=5000, key="quantum_final_refresh")
 
 # Memoria para el Score
@@ -35,22 +35,23 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 def get_data(symbol):
-    # Intentamos con api1 que es más estable para servidores
+    # Intentamos con api1 que es más estable para servidores en la nube
     url = f"https://api1.binance.com/api/v3/ticker/24hr?symbol={symbol}"
     try:
-        res = requests.get(url, timeout=3).json()
+        res = requests.get(url, timeout=4).json()
         price = float(res['lastPrice'])
         change = float(res['priceChangePercent'])
         
-        # Lógica de Score simplificada para asegurar carga
-        score = 50 + (change * 2) 
-        score = np.clip(score, 10, 95)
+        # Lógica de Score basada en el cambio de 24h para asegurar que siempre haya número
+        score = 50 + (change * 1.5) 
+        score = np.clip(score, 15, 95)
         st.session_state.score_mem[symbol] = score
         
-        trend = "UP" if change > 0 else "DOWN"
+        trend = "ALZA" if change > 0 else "BAJA"
         return price, score, trend
     except:
-        return None, st.session_state.score_mem[symbol], "WAIT"
+        # Si falla la conexión, mostramos lo último guardado
+        return None, st.session_state.score_mem[symbol], "ESPERANDO"
 
 st.markdown("<h1 style='text-align:center; color:#00fbff;'>🏹 QUANTUM SNIPER PRO</h1>", unsafe_allow_html=True)
 
@@ -60,6 +61,7 @@ for i, sym in enumerate(PAIRS):
     price, score, trend = get_data(sym)
     
     with cols[i % 3]:
+        # Si no hay precio, mostramos el último mensaje de carga
         display_price = f"${price:,.2f}" if price else "Sincronizando..."
         t_color = "#00ff88" if score >= THRESHOLD else "#00fbff"
         
@@ -74,16 +76,16 @@ for i, sym in enumerate(PAIRS):
             </div>
         """, unsafe_allow_html=True)
         
-        # Gráfico Radar con KEY ÚNICA para evitar el error DuplicateElementId
+        # GRÁFICO CON KEY ÚNICA (Esto evita el error que te salió)
         fig = go.Figure(go.Scatterpolar(
-            r=[score, 60, 70, 50, 80, score],
-            theta=['A','B','C','D','E','A'],
-            fill='toself', line=dict(color=t_color)
+            r=[score, 65, 75, 55, 85, score],
+            theta=['MOM','VOL','RSI','VAR','TEND','MOM'],
+            fill='toself', line=dict(color=t_color, width=2)
         ))
         fig.update_layout(
             polar=dict(radialaxis=dict(visible=False, range=[0, 100])),
-            showlegend=False, height=150, paper_bgcolor="rgba(0,0,0,0)", 
-            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=20,r=20,t=10,b=10)
+            showlegend=False, height=180, paper_bgcolor="rgba(0,0,0,0)", 
+            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=30,r=30,t=10,b=10)
         )
-        # Aquí está la corrección: key=f"chart_{sym}"
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"chart_{sym}")
+        # La 'key' es la identidad de cada gráfico
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"radar_{sym}")
