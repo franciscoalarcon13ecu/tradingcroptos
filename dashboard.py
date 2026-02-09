@@ -1,8 +1,7 @@
-import os
-import requests
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
+import requests
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 import time
@@ -10,25 +9,11 @@ import time
 # --- CONFIG ---
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
 THRESHOLD = 75.0
-ALPHA = 0.20 
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-# Autorefresh cada 5 segundos para estabilidad en la nube
-st_autorefresh(interval=5000, key="quantum_v5_final")
+st_autorefresh(interval=3000, key="binance_ultra_fast") # Cada 3 seg
 
-# Memoria persistente para evitar que los paneles desaparezcan al recargar
-if 'score_history' not in st.session_state:
-    st.session_state.score_history = {pair: 50.0 for pair in PAIRS}
-if 'price_memory' not in st.session_state:
-    st.session_state.price_memory = {pair: 0.0 for pair in PAIRS}
-if 'metric_memory' not in st.session_state:
-    st.session_state.metric_memory = {pair: [50, 50, 50, 50, 50] for pair in PAIRS}
-
-# Sesión de red optimizada
-if 'session' not in st.session_state:
-    st.session_state.session = requests.Session()
-
-# --- ESTILO CSS ---
+# Estilo CSS
 st.markdown("""
     <style>
     .stApp { background-color: #06090f; }
@@ -36,100 +21,50 @@ st.markdown("""
         background: rgba(16, 22, 35, 0.9);
         border-radius: 12px;
         padding: 15px;
-        border: 1px solid rgba(0, 251, 255, 0.15);
-        margin-bottom: 10px;
+        border: 1px solid rgba(0, 251, 255, 0.2);
     }
-    .sniper-alert { border: 1px solid #00ff88 !important; box-shadow: 0 0 15px rgba(0, 255, 136, 0.2); }
     .pair-name { color: #00fbff; font-weight: bold; font-size: 16px; }
-    .live-price { color: #ffffff; font-family: 'Courier New', monospace; font-size: 24px; font-weight: bold; margin: 5px 0; }
+    .live-price { color: #ffffff; font-family: 'Courier New', monospace; font-size: 26px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-def fetch_data(symbol, idx):
-    session = st.session_state.session
-    # ROTACIÓN DE APIs: Probamos diferentes puertas de Binance para evitar bloqueos
-    endpoints = [
-        "https://api1.binance.com/api/v3",
-        "https://api2.binance.com/api/v3",
-        "https://api3.binance.com/api/v3",
-        "https://api.binance.com/api/v3"
+def get_binance_data(symbol):
+    # Usamos el endpoint 'api.binance.us' o 'data-api' que suelen estar más abiertos
+    urls = [
+        f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}",
+        f"https://api1.binance.com/api/v3/ticker/price?symbol={symbol}",
+        f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}"
     ]
-    
-    for base_url in endpoints:
+    for url in urls:
         try:
-            # Petición de precio (Timeout de 3s para la nube)
-            p_res = session.get(f"{base_url}/ticker/price?symbol={symbol}", timeout=3.0).json()
-            curr_price = float(p_res['price'])
-            
-            # Petición de Klines para tendencia
-            k_res = session.get(f"{base_url}/klines?symbol={symbol}&interval=1m&limit=30", timeout=3.0).json()
-            df = pd.DataFrame(k_res, columns=["ot","open","high","low","close","vol","ct","qv","tr","tbb","tbq","i"]).apply(pd.to_numeric)
-            
-            # Cálculos técnicos rápidos
-            v_smooth = df['vol'].rolling(3).mean().iloc[-1]
-            v_mean = df['vol'].rolling(20).mean().iloc[-1]
-            z_vol = (v_smooth - v_mean) / (df['vol'].rolling(20).std().iloc[-1] + 1e-9)
-            
-            direction = "UP" if curr_price > df['open'].iloc[-1] else "DOWN"
-            raw_score = 50 + (np.clip(z_vol, -2, 2) * 15) + (20 if direction == "UP" else -15)
-            
-            # Suavizado de Score
-            prev_score = st.session_state.score_history[symbol]
-            smoothed_score = (raw_score * ALPHA) + (prev_score * (1 - ALPHA))
-            
-            # Guardar en memoria
-            st.session_state.score_history[symbol] = smoothed_score
-            st.session_state.price_memory[symbol] = curr_price
-            metrics = [smoothed_score, 50 + (np.sin(time.time()+idx)*10), 55 + (np.random.randn()), 50 + (z_vol*15), 85 if direction=="UP" else 35]
-            st.session_state.metric_memory[symbol] = metrics
-            
-            return curr_price, smoothed_score, direction, metrics
+            res = requests.get(url, timeout=2).json()
+            return float(res['price'])
         except:
-            continue # Si falla, prueba el siguiente endpoint
-            
-    # Si todo falla, usa lo último que tengamos en memoria
-    return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "RETRYING", st.session_state.metric_memory[symbol]
+            continue
+    return None
 
-# --- INTERFAZ ---
-st.markdown("<h1 style='text-align:center; color:#00fbff;'>🏹 QUANTUM SNIPER 6-CORE</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center; color:#00fbff;'>🏹 QUANTUM SNIPER (BINANCE LIVE)</h1>", unsafe_allow_html=True)
 
 cols = st.columns(3)
 
 for i, sym in enumerate(PAIRS):
-    price, score, trend, metrics = fetch_data(sym, i)
+    price = get_binance_data(sym)
     
     with cols[i % 3]:
-        if price == 0:
-            st.markdown(f'<div class="crypto-card">Sincronizando {sym}...</div>', unsafe_allow_html=True)
+        if price is None:
+            st.error(f"Error conexión {sym}")
             continue
             
-        is_sniper = score >= THRESHOLD
-        t_color = "#00ff88" if is_sniper else "#00fbff"
-        
         st.markdown(f"""
-            <div class="crypto-card {'sniper-alert' if is_sniper else ''}">
-                <div style="display:flex; justify-content:space-between;">
-                    <span class="pair-name">{sym}</span>
-                    <span style="color:#444; font-size:10px;">PRO LIVE FEED</span>
-                </div>
+            <div class="crypto-card">
+                <span class="pair-name">{sym}</span>
                 <div class="live-price">${price:,.2f}</div>
-                <div style="display:flex; justify-content:space-between; border-top:1px solid #222; margin-top:10px; padding-top:10px;">
-                    <span style="color:{t_color}; font-weight:bold; font-size:18px;">SCORE: {score:.1f}</span>
-                    <span style="color:white; font-weight:bold;">{trend}</span>
-                </div>
+                <div style="color:#00ff88; font-size:12px; margin-top:5px;">● BINANCE REAL-TIME</div>
             </div>
         """, unsafe_allow_html=True)
         
-        # Gráfico Radar
-        fig = go.Figure(go.Scatterpolar(
-            r=metrics + [metrics[0]],
-            theta=['CLV', 'CVD', 'RSI', 'RVOL', 'MOM', 'CLV'],
-            fill='toself', fillcolor=f'rgba(0, 251, 255, 0.1)',
-            line=dict(color=t_color, width=2)
-        ))
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=False, range=[0, 100]), angularaxis=dict(tickfont=dict(size=10, color="#00fbff"))),
-            showlegend=False, height=180, margin=dict(l=40, r=40, t=20, b=20),
-            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
-        )
+        # Mini gráfico simulado para no perder el estilo
+        metrics = [np.random.randint(60, 90) for _ in range(5)]
+        fig = go.Figure(go.Scatterpolar(r=metrics + [metrics[0]], theta=['A','B','C','D','E','A'], fill='toself', line=dict(color='#00fbff')))
+        fig.update_layout(polar=dict(radialaxis=dict(visible=False, range=[0, 100])), showlegend=False, height=150, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=20,r=20,t=20,b=20))
         st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
