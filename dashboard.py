@@ -3,6 +3,15 @@ from supabase import create_client
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
 
+import streamlit as st
+from supabase import create_client
+from streamlit_autorefresh import st_autorefresh
+
+# Esto obliga a Chrome a pedir datos nuevos cada 2 segundos
+st_autorefresh(interval=2000, key="frequence_check")
+
+# ... resto del código de Supabase ...
+
 # --- CONFIG ---
 st.set_page_config(page_title="QUANTUM SNIPER LIVE", layout="wide")
 st_autorefresh(interval=2000, key="bridge_sync")
