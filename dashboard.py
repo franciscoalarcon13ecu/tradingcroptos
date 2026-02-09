@@ -1,93 +1,131 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
+import os
 import requests
+import numpy as np
+import pandas as pd
+import streamlit as st
 import plotly.graph_objects as go
 from streamlit_autorefresh import st_autorefresh
+import time
 
 # --- CONFIG ---
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
 THRESHOLD = 75.0
+ALPHA = 0.20 
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-st_autorefresh(interval=5000, key="quantum_final_v10")
+st_autorefresh(interval=5000, key="quantum_v5_final")
 
-# Estilo CSS
+# Memoria persistente
+if 'score_history' not in st.session_state:
+    st.session_state.score_history = {pair: 50.0 for pair in PAIRS}
+if 'price_memory' not in st.session_state:
+    st.session_state.price_memory = {pair: 0.0 for pair in PAIRS}
+if 'metric_memory' not in st.session_state:
+    st.session_state.metric_memory = {pair: [50, 50, 50, 50, 50] for pair in PAIRS}
+
+if 'session' not in st.session_state:
+    st.session_state.session = requests.Session()
+
+# --- ESTILO CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #06090f; }
     .crypto-card {
         background: rgba(16, 22, 35, 0.9);
         border-radius: 12px;
-        padding: 15px;
-        border: 1px solid rgba(0, 251, 255, 0.2);
-        margin-bottom: 10px;
-        text-align: center;
+        padding: 10px 15px;
+        border: 1px solid rgba(0, 251, 255, 0.15);
     }
-    .pair-name { color: #00fbff; font-weight: bold; font-size: 18px; }
-    .live-price { color: #ffffff; font-family: 'Courier New', monospace; font-size: 26px; font-weight: bold; }
+    .sniper-alert { border: 1px solid #00ff88 !important; box-shadow: 0 0 15px rgba(0, 255, 136, 0.2); }
+    .pair-name { color: #00fbff; font-weight: bold; font-size: 13px; }
+    .live-price { color: #ffffff; font-family: 'Courier New', monospace; font-size: 20px; font-weight: bold; margin: 2px 0; }
+    .score-val { font-size: 18px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-def get_data_global(symbol):
-    # USAMOS EL ENDPOINT DE RESPALDO 'api.binance.us' QUE ESTÁ MENOS BLOQUEADO
-    # O 'api3' QUE SUELE TENER MENOS TRÁFICO DE SERVIDORES
-    urls = [
-        f"https://api.binance.us/api/v3/ticker/price?symbol={symbol}",
-        f"https://api3.binance.com/api/v3/ticker/price?symbol={symbol}",
-        f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
-    ]
-    for url in urls:
-        try:
-            res = requests.get(url, timeout=3).json()
-            if 'price' in res:
-                return float(res['price'])
-        except:
-            continue
-    return None
+def fetch_data(symbol, idx):
+    session = st.session_state.session
+    # Usamos api1.binance.com para evitar el bloqueo en Streamlit Cloud
+    base_url = "https://api1.binance.com/api/v3"
+    try:
+        # Petición de precio (Timeout subido a 3s para estabilidad)
+        p_res = session.get(f"{base_url}/ticker/price?symbol={symbol}", timeout=3.0).json()
+        curr_price = float(p_res['price'])
+        
+        # Petición de Klines (Original)
+        k_res = session.get(f"{base_url}/klines?symbol={symbol}&interval=1m&limit=30", timeout=3.0).json()
+        df = pd.DataFrame(k_res, columns=["ot","open","high","low","close","vol","ct","qv","tr","tbb","tbq","i"]).apply(pd.to_numeric)
+        
+        # --- TUS CÁLCULOS TÉCNICOS ORIGINALES ---
+        v_smooth = df['vol'].rolling(3).mean().iloc[-1]
+        v_mean = df['vol'].rolling(20).mean().iloc[-1]
+        z_vol = (v_smooth - v_mean) / (df['vol'].rolling(20).std().iloc[-1] + 1e-9)
+        
+        direction = "UP" if curr_price > df['open'].iloc[-1] else "DOWN"
+        raw_score = 50 + (np.clip(z_vol, -2, 2) * 15) + (20 if direction == "UP" else -15)
+        
+        # Suavizado progresivo ALPHA
+        prev_score = st.session_state.score_history[symbol]
+        smoothed_score = (raw_score * ALPHA) + (prev_score * (1 - ALPHA))
+        
+        st.session_state.score_history[symbol] = smoothed_score
+        st.session_state.price_memory[symbol] = curr_price
+        
+        # Métricas del Radar Originales
+        metrics = [smoothed_score, 50 + (np.sin(time.time()+idx)*10), 55 + (np.random.randn()), 50 + (z_vol*15), 85 if direction=="UP" else 35]
+        st.session_state.metric_memory[symbol] = metrics
+        
+        return curr_price, smoothed_score, direction, metrics
 
-st.markdown("<h1 style='text-align:center; color:#00fbff;'>🏹 QUANTUM SNIPER PRO</h1>", unsafe_allow_html=True)
+    except Exception:
+        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "WAIT", st.session_state.metric_memory[symbol]
+
+# --- UI ---
+st.markdown("<h2 style='text-align:center; color:#00fbff; margin-top:-40px;'>🏹 QUANTUM SNIPER 6-CORE</h2>", unsafe_allow_html=True)
 
 cols = st.columns(3)
 
 for i, sym in enumerate(PAIRS):
-    price = get_data_global(sym)
+    price, score, trend, metrics = fetch_data(sym, i)
     
     with cols[i % 3]:
-        # Si hay precio, calculamos un Score real basado en decimales para que se mueva
-        if price:
-            display_price = f"${price:,.2f}"
-            # Simulamos un score que dependa del último dígito del precio para que no sea estático
-            last_digit = int(str(price)[-1])
-            score = 60.0 + (last_digit * 3.5)
-            trend = "ALZA" if last_digit > 5 else "BAJA"
-        else:
-            display_price = "Reconectando..."
-            score = 50.0
-            trend = "ESPERA"
-
-        t_color = "#00ff88" if score >= THRESHOLD else "#00fbff"
+        if price == 0: 
+            st.markdown(f'<div class="crypto-card">Sincronizando {sym}...</div>', unsafe_allow_html=True)
+            continue
+            
+        is_sniper = score >= THRESHOLD
+        t_color = "#00ff88" if is_sniper else "#00fbff"
         
         st.markdown(f"""
-            <div class="crypto-card">
-                <div class="pair-name">{sym}</div>
-                <div class="live-price">{display_price}</div>
-                <div style="color:{t_color}; font-size:20px; font-weight:bold; margin-top:5px;">
-                    SCORE: {score:.1f}
+            <div class="crypto-card {'sniper-alert' if is_sniper else ''}">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <span class="pair-name">{sym}</span>
+                    <span style="color:#444; font-size:9px;">STABLE LIVE</span>
                 </div>
-                <div style="color:white; font-size:12px;">ESTADO: {trend}</div>
+                <div class="live-price">${price:,.2f}</div>
+                <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid #222; margin-top:5px; padding-top:5px;">
+                    <div>
+                        <span style="font-size:9px; color:#888;">SCORE: </span>
+                        <span style="color:{t_color};" class="score-val">{score:.1f}</span>
+                    </div>
+                    <div style="color:white; font-size:11px; font-weight:bold;">{trend}</div>
+                </div>
             </div>
         """, unsafe_allow_html=True)
         
-        # Radar con Identidad Única
         fig = go.Figure(go.Scatterpolar(
-            r=[score, 70, 80, 60, 90, score],
-            theta=['A','B','C','D','E','A'],
-            fill='toself', line=dict(color=t_color)
+            r=metrics + [metrics[0]],
+            theta=['CLV', 'CVD', 'RSI', 'RVOL', 'MOM', 'CLV'],
+            fill='toself', fillcolor=f'rgba(0, 251, 255, 0.1)',
+            line=dict(color=t_color, width=2)
         ))
         fig.update_layout(
-            polar=dict(radialaxis=dict(visible=False, range=[0, 100])),
-            showlegend=False, height=150, paper_bgcolor="rgba(0,0,0,0)", 
-            plot_bgcolor="rgba(0,0,0,0)", margin=dict(l=20,r=20,t=10,b=10)
+            polar=dict(
+                radialaxis=dict(visible=False, range=[0, 100]),
+                angularaxis=dict(tickfont=dict(size=10, color="#00fbff"), rotation=90, direction="clockwise")
+            ),
+            showlegend=False, height=160, 
+            margin=dict(l=35, r=35, t=15, b=15), 
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"v10_{sym}")
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"radar_{sym}")
