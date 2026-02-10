@@ -10,8 +10,8 @@ LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
 
-# Motor de movimiento (5 segundos)
-st_autorefresh(interval=5000, key="quantum_v26_2026")
+# Motor de refresco cada 5 segundos
+st_autorefresh(interval=5000, key="quantum_v27_stable")
 
 # --- CONEXIÓN A SECRETOS ---
 try:
@@ -129,9 +129,15 @@ for i, sym in enumerate(PAIRS):
                 domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])),
             showlegend=False, height=260, margin=dict(l=30, r=30, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)"
         )
-        # AQUÍ ESTÁ EL CAMBIO: width='stretch'
         st.plotly_chart(fig, width='stretch', config={'displayModeBar': False}, key=f"rad_{sym}_{i}")
 
-# --- BACKTESTING ---
+# --- BACKTESTING (Línea corregida aquí) ---
 st.write("---")
-if os.path.exists(LOG_
+if os.path.exists(LOG_FILE):
+    try:
+        log_df = pd.read_csv(LOG_FILE)
+        if not log_df.empty:
+            st.subheader(f"📊 Señales Detectadas ({len(log_df)})")
+            st.dataframe(log_df.tail(10).sort_values(by='timestamp', ascending=False), width='stretch')
+    except:
+        pass
