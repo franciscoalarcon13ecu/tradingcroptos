@@ -1,97 +1,134 @@
+import os
+import requests
+import numpy as np
+import pandas as pd
 import streamlit as st
-from supabase import create_client
-from streamlit_autorefresh import st_autorefresh
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
+from datetime import datetime
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="QUANTUM SNIPER LIVE", layout="wide")
+# --- CONFIGURACIÓN ---
+PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
+THRESHOLD = 70.0
+ALPHA = 0.25 
+LOG_FILE = "backtest_log.csv"
 
-# Forzamos refresco cada 2 segundos para sincronía total
-st_autorefresh(interval=2000, key="bridge_sync")
+st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
+st_autorefresh(interval=5000, key="quantum_github_prod")
 
-# Inicializar Supabase (El puente con tu PC)
-SUPABASE_URL = "https://gjcmfmaawnlhsihcyptp.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdqY21mbWFhd25saHNpaGN5cHRwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA2NjMwMDgsImV4cCI6MjA4NjIzOTAwOH0.0xJ00mtixyK3KLGgfpcZkEORQGHwR2qy-hVzmYlpMYk"
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- GESTIÓN DE ARCHIVOS PARA GITHUB/CLOUD ---
+if os.path.exists(LOG_FILE):
+    try:
+        test_df = pd.read_csv(LOG_FILE)
+        if len(test_df.columns) < 10: os.remove(LOG_FILE)
+    except:
+        os.remove(LOG_FILE)
 
-# 1. ORDEN SOLICITADO
-ORDERED_PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
+if 'score_history' not in st.session_state:
+    st.session_state.score_history = {pair: 50.0 for pair in PAIRS}
+if 'price_memory' not in st.session_state:
+    st.session_state.price_memory = {pair: 0.0 for pair in PAIRS}
+if 'metric_memory' not in st.session_state:
+    st.session_state.metric_memory = {pair: [50]*5 for pair in PAIRS}
+if 'session' not in st.session_state:
+    st.session_state.session = requests.Session()
 
-# --- ESTILO CSS ---
+def log_backtest(symbol, price, score, trend, metrics):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_entry = {
+        "timestamp": now, "symbol": symbol, "price": price, 
+        "score": round(score, 2), "trend": trend,
+        "clv": metrics[0], "cvd": metrics[1], "rsi": metrics[2], "vol": metrics[3], "mom": metrics[4]
+    }
+    df_new = pd.DataFrame([new_entry])
+    if not os.path.isfile(LOG_FILE):
+        df_new.to_csv(LOG_FILE, index=False)
+    else:
+        df_new.to_csv(LOG_FILE, mode='a', header=False, index=False)
+
+# --- CSS ESTILO "PRO" ---
 st.markdown("""
     <style>
-    .main { background-color: #06090f; color: #ffffff; }
+    .main { background-color: #06090f; }
     .crypto-card {
-        background: rgba(16, 22, 35, 0.9);
+        background-color: #101623 !important;
         border-radius: 12px;
         padding: 15px;
         border: 1px solid rgba(0, 251, 255, 0.2);
-        margin-bottom: 10px;
+        margin-bottom: 5px;
     }
-    .sniper-alert { border: 2px solid #00ff88 !important; box-shadow: 0 0 15px rgba(0, 255, 136, 0.3); }
-    .pair-name { color: #00fbff; font-weight: bold; font-size: 16px; letter-spacing: 1px; }
-    .live-price { color: #ffffff; font-family: 'Courier New', monospace; font-size: 24px; font-weight: bold; }
+    .pair-header { color: #00fbff; font-weight: bold; font-size: 14px; letter-spacing: 1px; }
+    .price-text { color: #ffffff; font-family: monospace; font-size: 24px; font-weight: bold; }
+    .sc-label { color: #00fbff; font-weight: 900; font-size: 20px; }
+    .status-tag { color: #555; font-size: 10px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-st.markdown("<h2 style='text-align:center; color:#00fbff; margin-top:-30px;'>🏹 QUANTUM SNIPER 6-CORE</h2>", unsafe_allow_html=True)
+def fetch_data(symbol):
+    try:
+        p_res = st.session_state.session.get(f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}", timeout=1.5).json()
+        curr_price = float(p_res['price'])
+        k_res = st.session_state.session.get(f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30", timeout=1.5).json()
+        df = pd.DataFrame(k_res).apply(pd.to_numeric)
+        v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
+        z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
+        direction = "UP" if curr_price > df[1].iloc[-1] else "DOWN"
+        raw_score = 50 + (np.clip(abs(z_vol), 0, 2.5) * 15)
+        smoothed = (raw_score * ALPHA) + (st.session_state.score_history[symbol] * (1 - ALPHA))
+        st.session_state.score_history[symbol] = smoothed
+        st.session_state.price_memory[symbol] = curr_price
+        metrics = [round(smoothed,1), round(50+(z_vol*10),1), 60, round(50+(abs(z_vol)*12),1), 85 if direction=="UP" else 15]
+        st.session_state.metric_memory[symbol] = metrics
+        if smoothed >= THRESHOLD: log_backtest(symbol, curr_price, smoothed, direction, metrics)
+        return curr_price, smoothed, direction, metrics
+    except:
+        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "WAIT", st.session_state.metric_memory[symbol]
 
-try:
-    # LEER DE SUPABASE (Los datos que envía tu PC)
-    res = supabase.table("sniper_bridge").select("*").execute()
-    raw_data = res.data
+st.markdown("<h1 style='text-align:center; color:#00fbff; margin-top:-40px;'>🏹 QUANTUM SNIPER LIVE</h1>", unsafe_allow_html=True)
+
+cols = st.columns(3)
+for i, sym in enumerate(PAIRS):
+    price, score, trend, metrics = fetch_data(sym)
+    is_sniper = score >= THRESHOLD
+    color = "#00ff88" if (is_sniper and trend=="UP") else ("#ff4b4b" if (is_sniper and trend=="DOWN") else "#00fbff")
     
-    if raw_data:
-        # Convertir a diccionario para reordenar fácilmente
-        data_dict = {row['symbol']: row for row in raw_data}
+    with cols[i % 3]:
+        st.markdown(f"""
+            <div class="crypto-card" style="border-color: {color if is_sniper else 'rgba(0,251,255,0.1)'};">
+                <div style="display:flex; justify-content:space-between;">
+                    <span class="pair-header">{sym}</span>
+                    <span class="status-tag">LIVE FEED ACTIVE</span>
+                </div>
+                <div class="price-text">${price:,.2f}</div>
+                <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                    <span class="sc-label">SC: {score:.1f}</span>
+                    <span style="color:{color}; font-weight:bold;">{trend}</span>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
         
-        cols = st.columns(3)
+        fig = go.Figure(go.Scatterpolar(
+            r=metrics + [metrics[0]],
+            theta=['SC', 'CVD', 'RSI', 'VOL', 'MOM', 'SC'],
+            fill='toself', 
+            fillcolor=f'rgba({0 if trend=="UP" else 255}, {255 if trend=="UP" else 0}, 255, 0.1)',
+            line=dict(color=color, width=2)
+        ))
         
-        # 2. SEGUIR EL ORDEN ESTRICTO
-        for i, sym in enumerate(ORDERED_PAIRS):
-            if sym in data_dict:
-                row = data_dict[sym]
-                price = row['price']
-                score = row['score']
-                trend = row.get('trend', 'SCANNING')
-                metrics = row.get('metrics', [50, 50, 50, 50, 50])
-                
-                with cols[i % 3]:
-                    is_sniper = score >= 75.0
-                    t_color = "#00ff88" if is_sniper else "#00fbff"
-                    
-                    st.markdown(f"""
-                        <div class="crypto-card {'sniper-alert' if is_sniper else ''}">
-                            <div style="display:flex; justify-content:space-between;">
-                                <span class="pair-name">{sym}</span>
-                                <span style="color:gray; font-size:10px;">PC SYNC ACTIVE</span>
-                            </div>
-                            <div class="live-price">${price:,.2f}</div>
-                            <div style="display:flex; justify-content:space-between; margin-top:10px; border-top:1px solid #222; padding-top:5px;">
-                                <div style="color:{t_color}; font-size:20px; font-weight:bold;">SC: {score:.1f}</div>
-                                <div style="color:white; font-weight:bold;">{trend}</div>
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Gráfico Radar con los datos de TU PC
-                    fig = go.Figure(go.Scatterpolar(
-                        r=metrics + [metrics[0]],
-                        theta=['CLV', 'CVD', 'RSI', 'RVOL', 'MOM', 'CLV'],
-                        fill='toself', fillcolor=f'rgba(0, 251, 255, 0.1)',
-                        line=dict(color=t_color, width=2)
-                    ))
-                    fig.update_layout(
-                        polar=dict(
-                            radialaxis=dict(visible=False, range=[0, 100]),
-                            angularaxis=dict(tickfont=dict(size=10, color="#00fbff"))
-                        ),
-                        showlegend=False, height=150, margin=dict(l=40, r=40, t=10, b=10),
-                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)"
-                    )
-                    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-    else:
-        st.info("Aguardando datos de la estación base...")
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=False, range=[0, 100]),
+                angularaxis=dict(tickfont=dict(size=11, color="#00fbff", family="Arial Black"), rotation=90),
+                domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])
+            ),
+            showlegend=False, height=260, margin=dict(l=30, r=30, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"rad_{sym}")
 
-except Exception as e:
-    st.error(f"Error de conexión: {e}")
+st.write("---")
+st.subheader("📊 Signals Log")
+if os.path.exists(LOG_FILE):
+    try:
+        log_df = pd.read_csv(LOG_FILE)
+        st.dataframe(log_df.tail(10), use_container_width=True)
+    except: st.info("Waiting for signals...")
