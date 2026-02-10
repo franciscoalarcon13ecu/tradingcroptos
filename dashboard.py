@@ -10,8 +10,8 @@ LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
 
-# Motor de refresco cada 5 segundos
-st_autorefresh(interval=5000, key="quantum_v27_stable")
+# Refresco automático cada 5 segundos
+st_autorefresh(interval=5000, key="quantum_v28_final")
 
 # --- CONEXIÓN A SECRETOS ---
 try:
@@ -19,13 +19,22 @@ try:
 except:
     BINANCE_KEY = ""
 
+# --- LIMPIEZA INICIAL DE SEGURIDAD (Mismo sistema del segundo código) ---
+if os.path.exists(LOG_FILE):
+    try:
+        test_df = pd.read_csv(LOG_FILE)
+        if len(test_df.columns) < 10: # Si está incompleto, lo reseteamos
+            os.remove(LOG_FILE)
+    except:
+        os.remove(LOG_FILE)
+
 # --- MEMORIA DE SESIÓN ---
 if 'score_history' not in st.session_state:
     st.session_state.score_history = {pair: 50.0 for pair in PAIRS}
 if 'price_memory' not in st.session_state:
     st.session_state.price_memory = {pair: 0.0 for pair in PAIRS}
-if 'dir_memory' not in st.session_state:
-    st.session_state.dir_memory = {pair: "WAIT" for pair in PAIRS}
+if 'metric_memory' not in st.session_state:
+    st.session_state.metric_memory = {pair: [50]*5 for pair in PAIRS}
 if 'session' not in st.session_state:
     st.session_state.session = requests.Session()
 
@@ -57,41 +66,44 @@ st.markdown("""
     .pair-header { color: #00fbff; font-weight: bold; font-size: 14px; letter-spacing: 1px; }
     .price-text { color: #ffffff; font-family: monospace; font-size: 24px; font-weight: bold; }
     .sc-label { color: #00fbff; font-weight: 900; font-size: 20px; }
+    .status-tag { color: #555; font-size: 10px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 def fetch_data(symbol):
     try:
+        # Usamos API1 para mayor estabilidad de conexión
         headers = {'X-MBX-APIKEY': BINANCE_KEY} if BINANCE_KEY else {}
         url_p = f"https://api1.binance.com/api/v3/ticker/price?symbol={symbol}"
-        url_k = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
+        url_k = f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
         
-        p_res = st.session_state.session.get(url_p, headers=headers, timeout=2).json()
+        p_res = st.session_state.session.get(url_p, headers=headers, timeout=1.5).json()
         curr_price = float(p_res['price'])
         
-        k_res = st.session_state.session.get(url_k, headers=headers, timeout=2).json()
+        k_res = st.session_state.session.get(url_k, headers=headers, timeout=1.5).json()
         df = pd.DataFrame(k_res).apply(pd.to_numeric)
         
         v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
         z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
         
-        trend_up = curr_price > df[4].iloc[-2] and curr_price > df[1].iloc[-1]
-        direction = "UP" if trend_up else "DOWN"
+        direction = "UP" if curr_price > df[1].iloc[-1] else "DOWN"
         
         raw_score = 50 + (np.clip(abs(z_vol), 0, 2.5) * 15)
         smoothed = (raw_score * ALPHA) + (st.session_state.score_history[symbol] * (1 - ALPHA))
         
         st.session_state.score_history[symbol] = smoothed
         st.session_state.price_memory[symbol] = curr_price
-        st.session_state.dir_memory[symbol] = direction
         
+        # [SCORE, CVD, RSI, VOL, MOM]
         metrics = [round(smoothed,1), round(50+(z_vol*10),1), 60, round(50+(abs(z_vol)*12),1), 85 if direction=="UP" else 15]
+        st.session_state.metric_memory[symbol] = metrics
         
         if smoothed >= THRESHOLD:
             log_backtest(symbol, curr_price, smoothed, direction, metrics)
+            
         return curr_price, smoothed, direction, metrics
     except:
-        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], st.session_state.dir_memory[symbol], [50, 50, 60, 50, 50]
+        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "WAIT", st.session_state.metric_memory[symbol]
 
 st.markdown("<h1 style='text-align:center; color:#00fbff; margin-top:-40px;'>🏹 QUANTUM SNIPER 6-CORE</h1>", unsafe_allow_html=True)
 
@@ -106,7 +118,7 @@ for i, sym in enumerate(PAIRS):
             <div class="crypto-card" style="border: 2px solid {color if is_sniper else 'rgba(0,251,255,0.1)'};">
                 <div style="display:flex; justify-content:space-between;">
                     <span class="pair-header">{sym}</span>
-                    <span style="color:{color}; font-size:10px; font-weight:bold;">{'● ACTIVE SIGNAL' if is_sniper else '○ SCANNING'}</span>
+                    <span class="status-tag">PC SYNC ACTIVE</span>
                 </div>
                 <div class="price-text">${price:,.2f}</div>
                 <div style="display:flex; justify-content:space-between; margin-top:10px;">
@@ -124,21 +136,29 @@ for i, sym in enumerate(PAIRS):
             line=dict(color=color, width=3)
         ))
         fig.update_layout(
-            polar=dict(radialaxis=dict(visible=False, range=[0, 100]),
-                angularaxis=dict(tickfont=dict(size=11, color="#00fbff", family="Arial Black"), rotation=90),
-                domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])),
-            showlegend=False, height=260, margin=dict(l=30, r=30, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)"
+            polar=dict(
+                radialaxis=dict(visible=False, range=[0, 100]),
+                angularaxis=dict(tickfont=dict(size=12, color="#00fbff", family="Arial Black"), rotation=90),
+                domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])
+            ),
+            showlegend=False, height=280, margin=dict(l=40, r=40, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)"
         )
         st.plotly_chart(fig, width='stretch', config={'displayModeBar': False}, key=f"rad_{sym}_{i}")
 
-# --- BACKTESTING (Línea corregida aquí) ---
+# --- BACKTESTING (LÓGICA SÓLIDA) ---
 st.write("---")
+st.subheader("📊 Historial de Backtesting (Señales 70+)")
+
 if os.path.exists(LOG_FILE):
     try:
         log_df = pd.read_csv(LOG_FILE)
         if not log_df.empty:
-            st.subheader(f"📊 Señales Detectadas ({len(log_df)})")
-            st.dataframe(log_df.tail(10).sort_values(by='timestamp', ascending=False), width='stretch')
-    except:
-        pass
+            st.dataframe(log_df.tail(15).sort_values(by='timestamp', ascending=False), width='stretch')
+            st.download_button("📥 Descargar Log Completo", data=log_df.to_csv(index=False), file_name="backtest_results.csv")
+        else:
+            st.info("Esperando señales en el mercado...")
+    except Exception as e:
+        st.error(f"Error de archivo: {e}. Reiniciando...")
+else:
+    st.info("Scanning... No hay señales registradas todavía.")
         
