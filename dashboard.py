@@ -7,66 +7,85 @@ PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
 LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER", layout="wide")
-st_autorefresh(interval=5000, key="quantum_anti_block")
+st_autorefresh(interval=5000, key="quantum_final_v21")
+
+# CSS para que se vea profesional (Negro y Cyan)
+st.markdown("""
+    <style>
+    [data-testid="stAppViewContainer"] { background-color: #06090f; }
+    .crypto-card {
+        background-color: #101623;
+        border-radius: 15px;
+        padding: 20px;
+        border: 1px solid #1d2636;
+        text-align: center;
+    }
+    .price-val { color: #ffffff; font-size: 32px; font-weight: bold; margin: 10px 0; }
+    .pair-name { color: #00fbff; font-size: 18px; font-weight: 900; }
+    </style>
+    """, unsafe_allow_html=True)
 
 if not os.path.exists(LOG_FILE):
     pd.DataFrame(columns=["timestamp", "symbol", "price", "score", "trend", "clv", "cvd", "rsi", "vol", "mom"]).to_csv(LOG_FILE, index=False)
 
 def fetch_data(symbol):
-    # Lista de endpoints para rotar si uno falla
+    # Probamos con 2 APIs diferentes para asegurar que DOGE y ADA carguen
     endpoints = [
         f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30",
-        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30",
-        f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30",
-        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
+        f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
     ]
-    
     for url in endpoints:
         try:
-            res = requests.get(url, timeout=2)
+            res = requests.get(url, timeout=3)
             if res.status_code == 200:
-                data = res.json()
-                df = pd.DataFrame(data).apply(pd.to_numeric)
-                
+                df = pd.DataFrame(res.json()).apply(pd.to_numeric)
                 curr_price = df[4].iloc[-1]
                 v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
                 z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
                 score = 50 + (np.clip(abs(z_vol), 0, 2.5) * 15)
                 trend = "UP" if curr_price > df[1].iloc[-1] else "DOWN"
-                
-                # Reporte en terminal
-                print(f"✅ {symbol} OK con {url.split('/')[2]}")
-                
                 metrics = [round(score,1), round(50+(z_vol*10),1), 60, round(50+(abs(z_vol)*12),1), 85 if trend=="UP" else 15]
                 return curr_price, score, trend, metrics
-        except:
-            continue
-            
-    # Si todos los intentos fallan
-    print(f"❌ {symbol} BLOQUEADO EN TODAS LAS API")
-    return 0.0, 50.0, "BLOCK", [50, 50, 50, 50, 50]
+        except: continue
+    return 0.0, 50.0, "API WAIT", [50, 50, 50, 50, 50]
 
 st.markdown("<h1 style='text-align:center; color:#00fbff;'>🏹 QUANTUM SNIPER LIVE</h1>", unsafe_allow_html=True)
 
 cols = st.columns(3)
 for i, sym in enumerate(PAIRS):
     price, score, trend, metrics = fetch_data(sym)
-    color = "#00ff88" if score > 70 and trend == "UP" else "#ff4b4b" if score > 70 else "#00fbff"
+    color = "#00ff88" if trend == "UP" else "#ff4b4b"
     
     with cols[i % 3]:
-        st.markdown(f'''
-            <div style="background:#101623; border:1px solid {color}; border-radius:10px; padding:15px; margin-bottom:10px;">
-                <h3 style="margin:0;color:#00fbff;">{sym}</h3>
-                <h2 style="margin:0;color:white;">${price:,.2f}</h2>
-                <p style="margin:0;color:{color}; font-weight:bold;">SCORE: {score:.1f} | {trend}</p>
-            </div>''', unsafe_allow_html=True)
+        # Tarjeta Visual mejorada
+        st.markdown(f"""
+            <div class="crypto-card">
+                <div class="pair-name">{sym}</div>
+                <div class="price-val">${price:,.2f}</div>
+                <div style="color:{color}; font-weight:bold;">SCORE: {score:.1f} | {trend}</div>
+            </div>
+        """, unsafe_allow_html=True)
         
-        fig = go.Figure(go.Scatterpolar(r=metrics+[metrics[0]], theta=['SC','CVD','RSI','VOL','MOM','SC'], fill='toself', line=dict(color=color)))
-        fig.update_layout(polar=dict(radialaxis=dict(visible=False, range=[0, 100]), angularaxis=dict(tickfont=dict(color="#00fbff", size=10), rotation=90), domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])),
-                          showlegend=False, height=250, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, width='stretch', key=f"rad_v20_{sym}")
+        # Radar con leyendas claras
+        fig = go.Figure(go.Scatterpolar(
+            r=metrics + [metrics[0]],
+            theta=['SCORE', 'CVD', 'RSI', 'VOL', 'MOM', 'SCORE'],
+            fill='toself', line=dict(color=color, width=2)
+        ))
+        fig.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=False, range=[0, 100]),
+                angularaxis=dict(tickfont=dict(color="#00fbff", size=11), rotation=90),
+                domain=dict(x=[0.1, 0.9], y=[0.1, 0.9])
+            ),
+            showlegend=False, height=280, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)"
+        )
+        st.plotly_chart(fig, width='stretch', config={'displayModeBar': False}, key=f"v21_{sym}")
 
 st.write("---")
-st.subheader("📊 Historial de Señales")
-log_df = pd.read_csv(LOG_FILE)
-st.dataframe(log_df.tail(10), width='stretch')
+st.subheader("📊 Últimas Señales Detectadas")
+try:
+    log_df = pd.read_csv(LOG_FILE)
+    st.dataframe(log_df.tail(10), width='stretch')
+except:
+    st.info("Esperando señales...")
