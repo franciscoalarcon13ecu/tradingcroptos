@@ -63,7 +63,7 @@ st.markdown("""
 def fetch_data(symbol):
     try:
         headers = {'X-MBX-APIKEY': BINANCE_KEY} if BINANCE_KEY else {}
-        url_p = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        url_p = f"https://api1.binance.com/api/v3/ticker/price?symbol={symbol}"
         url_k = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
         
         p_res = st.session_state.session.get(url_p, headers=headers, timeout=2).json()
