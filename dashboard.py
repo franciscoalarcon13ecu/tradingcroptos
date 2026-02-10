@@ -14,12 +14,11 @@ ALPHA = 0.25
 LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-st_autorefresh(interval=5000, key="quantum_final_v17_cloud")
+st_autorefresh(interval=5000, key="quantum_final_v18_2026")
 
-# --- BLOQUE DE SEGURIDAD PARA LA NUBE (Lo que me pediste) ---
+# --- LIMPIEZA / INICIO DE LOGS ---
 if not os.path.exists(LOG_FILE):
-    df_init = pd.DataFrame(columns=["timestamp", "symbol", "price", "score", "trend", "clv", "cvd", "rsi", "vol", "mom"])
-    df_init.to_csv(LOG_FILE, index=False)
+    pd.DataFrame(columns=["timestamp", "symbol", "price", "score", "trend", "clv", "cvd", "rsi", "vol", "mom"]).to_csv(LOG_FILE, index=False)
 else:
     try:
         test_df = pd.read_csv(LOG_FILE)
@@ -29,7 +28,7 @@ else:
     except:
         os.remove(LOG_FILE)
 
-# Inicialización de Memoria
+# Memoria de Sesión
 if 'score_history' not in st.session_state:
     st.session_state.score_history = {pair: 50.0 for pair in PAIRS}
 if 'price_memory' not in st.session_state:
@@ -39,7 +38,6 @@ if 'metric_memory' not in st.session_state:
 if 'session' not in st.session_state:
     st.session_state.session = requests.Session()
 
-# --- MOTOR DE LOGS ---
 def log_backtest(symbol, price, score, trend, metrics):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     new_entry = {
@@ -47,10 +45,9 @@ def log_backtest(symbol, price, score, trend, metrics):
         "score": round(score, 2), "trend": trend,
         "clv": metrics[0], "cvd": metrics[1], "rsi": metrics[2], "vol": metrics[3], "mom": metrics[4]
     }
-    df_new = pd.DataFrame([new_entry])
-    df_new.to_csv(LOG_FILE, mode='a', header=not os.path.exists(LOG_FILE), index=False)
+    pd.DataFrame([new_entry]).to_csv(LOG_FILE, mode='a', header=not os.path.exists(LOG_FILE), index=False)
 
-# --- ESTILO VISUAL ---
+# Estilo CSS
 st.markdown("""
     <style>
     .main { background-color: #06090f; }
@@ -61,24 +58,20 @@ st.markdown("""
         border: 1px solid rgba(0, 251, 255, 0.15);
         margin-bottom: 5px;
     }
-    .pair-header { color: #00fbff; font-weight: bold; font-size: 14px; letter-spacing: 1px; }
+    .pair-header { color: #00fbff; font-weight: bold; font-size: 14px; }
     .price-text { color: #ffffff; font-family: monospace; font-size: 24px; font-weight: bold; }
     .sc-label { color: #00fbff; font-weight: 900; font-size: 20px; }
-    .status-tag { color: #555; font-size: 10px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
 def fetch_data(symbol):
     try:
-        # Rotación de API para evitar el "bloqueo de 50" en la nube
-        base_url = "https://api1.binance.com" if i % 2 == 0 else "https://api.binance.com"
-        
+        base_url = "https://api.binance.com"
         p_res = st.session_state.session.get(f"{base_url}/api/v3/ticker/price?symbol={symbol}", timeout=2).json()
-        curr_price = float(p_res['price'])
-        
         k_res = st.session_state.session.get(f"{base_url}/api/v3/klines?symbol={symbol}&interval=1m&limit=30", timeout=2).json()
-        df = pd.DataFrame(k_res).apply(pd.to_numeric)
         
+        curr_price = float(p_res['price'])
+        df = pd.DataFrame(k_res).apply(pd.to_numeric)
         v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
         z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
         direction = "UP" if curr_price > df[1].iloc[-1] else "DOWN"
@@ -88,7 +81,6 @@ def fetch_data(symbol):
         
         st.session_state.score_history[symbol] = smoothed
         st.session_state.price_memory[symbol] = curr_price
-        
         metrics = [round(smoothed,1), round(50+(z_vol*10),1), 60, round(50+(abs(z_vol)*12),1), 85 if direction=="UP" else 15]
         st.session_state.metric_memory[symbol] = metrics
         
@@ -97,12 +89,11 @@ def fetch_data(symbol):
             
         return curr_price, smoothed, direction, metrics
     except:
-        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "API WAIT", st.session_state.metric_memory[symbol]
+        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], "WAIT", st.session_state.metric_memory[symbol]
 
 st.markdown("<h1 style='text-align:center; color:#00fbff; margin-top:-40px;'>🏹 QUANTUM SNIPER 6-CORE</h1>", unsafe_allow_html=True)
 
 cols = st.columns(3)
-
 for i, sym in enumerate(PAIRS):
     price, score, trend, metrics = fetch_data(sym)
     is_sniper = score >= THRESHOLD
@@ -113,7 +104,7 @@ for i, sym in enumerate(PAIRS):
             <div class="crypto-card" style="border-color: {color if is_sniper else 'rgba(0,251,255,0.1)'};">
                 <div style="display:flex; justify-content:space-between;">
                     <span class="pair-header">{sym}</span>
-                    <span class="status-tag">CLOUD ACTIVE</span>
+                    <span style="color:#555; font-size:10px; font-weight:bold;">SYNC OK</span>
                 </div>
                 <div class="price-text">${price:,.2f}</div>
                 <div style="display:flex; justify-content:space-between; margin-top:10px;">
@@ -134,21 +125,14 @@ for i, sym in enumerate(PAIRS):
         fig.update_layout(
             polar=dict(
                 radialaxis=dict(visible=False, range=[0, 100]),
-                angularaxis=dict(
-                    tickfont=dict(size=12, color="#00fbff", family="Arial Black"),
-                    rotation=90,
-                    direction="clockwise"
-                ),
-                domain=dict(x=[0.15, 0.85], y=[0.15, 0.85]) # ESPACIO PARA LEYENDAS
+                angularaxis=dict(tickfont=dict(size=12, color="#00fbff", family="Arial Black"), rotation=90),
+                domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])
             ),
-            showlegend=False,
-            height=280, 
-            margin=dict(l=40, r=40, t=20, b=20),
-            paper_bgcolor="rgba(0,0,0,0)"
+            showlegend=False, height=280, margin=dict(l=40, r=40, t=20, b=20), paper_bgcolor="rgba(0,0,0,0)"
         )
-        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}, key=f"rad_{sym}_{i}")
+        # Cambio clave aquí: width='stretch'
+        st.plotly_chart(fig, width='stretch', config={'displayModeBar': False}, key=f"rad_{sym}_{i}")
 
-# --- SECCIÓN BACKTESTING ---
 st.write("---")
 st.subheader("📊 Historial de Backtesting")
 
@@ -156,7 +140,8 @@ if os.path.exists(LOG_FILE):
     try:
         log_df = pd.read_csv(LOG_FILE)
         if not log_df.empty:
-            st.dataframe(log_df.tail(15).sort_values(by='timestamp', ascending=False), use_container_width=True)
+            # Cambio clave aquí: width='stretch'
+            st.dataframe(log_df.tail(15).sort_values(by='timestamp', ascending=False), width='stretch')
         else:
             st.info("Esperando señales...")
     except:
