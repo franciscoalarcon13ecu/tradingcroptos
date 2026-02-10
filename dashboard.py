@@ -141,3 +141,4 @@ if os.path.exists(LOG_FILE):
             st.dataframe(log_df.tail(10).sort_values(by='timestamp', ascending=False), width='stretch')
     except:
         pass
+        
