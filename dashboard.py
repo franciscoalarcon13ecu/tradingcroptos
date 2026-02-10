@@ -9,14 +9,15 @@ ALPHA = 0.25
 LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-st_autorefresh(interval=5000, key="quantum_v25_secrets")
 
-# --- CONEXIÓN A SECRETOS (Esto es lo que faltaba) ---
-# El código busca las llaves que pegaste en el panel de Streamlit
+# Motor de movimiento (5 segundos)
+st_autorefresh(interval=5000, key="quantum_v25_resurrection")
+
+# --- CONEXIÓN A SECRETOS ---
 try:
     BINANCE_KEY = st.secrets["BINANCE_KEY"]
 except:
-    BINANCE_KEY = "" # Fallback si no hay secretos aún
+    BINANCE_KEY = ""
 
 # --- MEMORIA DE SESIÓN ---
 if 'score_history' not in st.session_state:
@@ -61,9 +62,7 @@ st.markdown("""
 
 def fetch_data(symbol):
     try:
-        # Usamos la llave de los Secretos para que Binance nos de prioridad
         headers = {'X-MBX-APIKEY': BINANCE_KEY} if BINANCE_KEY else {}
-        
         url_p = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         url_k = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
         
@@ -90,11 +89,9 @@ def fetch_data(symbol):
         
         if smoothed >= THRESHOLD:
             log_backtest(symbol, curr_price, smoothed, direction, metrics)
-            
         return curr_price, smoothed, direction, metrics
     except:
-        # Si falla, devuelve el último precio guardado para que la app no se detenga
-        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], st.session_state.dir_memory[symbol], [50]*5
+        return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], st.session_state.dir_memory[symbol], [50, 50, 60, 50, 50]
 
 st.markdown("<h1 style='text-align:center; color:#00fbff; margin-top:-40px;'>🏹 QUANTUM SNIPER 6-CORE</h1>", unsafe_allow_html=True)
 
@@ -123,7 +120,7 @@ for i, sym in enumerate(PAIRS):
             r=metrics + [metrics[0]],
             theta=['SCORE', 'CVD', 'RSI', 'VOL', 'MOM', 'SCORE'],
             fill='toself', 
-            fillcolor=f'rgba({0 if trend=="UP" else 255}, {255 if trend=="UP" else 0}, 255, 0.15)',
+            fillcolor=f'rgba({0 if trend=="UP" else 255}, {255 if trend=="UP" else 0}, 255, 0.1)',
             line=dict(color=color, width=3)
         ))
         fig.update_layout(
@@ -142,4 +139,5 @@ if os.path.exists(LOG_FILE):
         if not log_df.empty:
             st.subheader(f"📊 Señales Detectadas ({len(log_df)})")
             st.dataframe(log_df.tail(10).sort_values(by='timestamp', ascending=False), use_container_width=True)
-    except: pass
+    except:
+        pass
