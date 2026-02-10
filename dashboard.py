@@ -9,7 +9,14 @@ ALPHA = 0.25
 LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER 6-CORE", layout="wide")
-st_autorefresh(interval=5000, key="quantum_v24_stable")
+st_autorefresh(interval=5000, key="quantum_v25_secrets")
+
+# --- CONEXIÓN A SECRETOS (Esto es lo que faltaba) ---
+# El código busca las llaves que pegaste en el panel de Streamlit
+try:
+    BINANCE_KEY = st.secrets["BINANCE_KEY"]
+except:
+    BINANCE_KEY = "" # Fallback si no hay secretos aún
 
 # --- MEMORIA DE SESIÓN ---
 if 'score_history' not in st.session_state:
@@ -54,22 +61,21 @@ st.markdown("""
 
 def fetch_data(symbol):
     try:
-        # API Principal y Alternativa integradas
+        # Usamos la llave de los Secretos para que Binance nos de prioridad
+        headers = {'X-MBX-APIKEY': BINANCE_KEY} if BINANCE_KEY else {}
+        
         url_p = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         url_k = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
         
-        p_res = st.session_state.session.get(url_p, timeout=2).json()
+        p_res = st.session_state.session.get(url_p, headers=headers, timeout=2).json()
         curr_price = float(p_res['price'])
         
-        k_res = st.session_state.session.get(url_k, timeout=2).json()
+        k_res = st.session_state.session.get(url_k, headers=headers, timeout=2).json()
         df = pd.DataFrame(k_res).apply(pd.to_numeric)
         
         v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
         z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
         
-        # --- LÓGICA DE DIRECCIÓN SÓLIDA ---
-        # Si el precio es mayor al cierre anterior Y a la apertura actual: UP
-        # Esto evita que el color cambie por ruidos pequeños
         trend_up = curr_price > df[4].iloc[-2] and curr_price > df[1].iloc[-1]
         direction = "UP" if trend_up else "DOWN"
         
@@ -87,18 +93,15 @@ def fetch_data(symbol):
             
         return curr_price, smoothed, direction, metrics
     except:
+        # Si falla, devuelve el último precio guardado para que la app no se detenga
         return st.session_state.price_memory[symbol], st.session_state.score_history[symbol], st.session_state.dir_memory[symbol], [50]*5
 
 st.markdown("<h1 style='text-align:center; color:#00fbff; margin-top:-40px;'>🏹 QUANTUM SNIPER 6-CORE</h1>", unsafe_allow_html=True)
 
 cols = st.columns(3)
-
 for i, sym in enumerate(PAIRS):
     price, score, trend, metrics = fetch_data(sym)
     is_sniper = score >= THRESHOLD
-    
-    # --- CORRECCIÓN DE COLOR ---
-    # Si es Sniper, el color es VERDE para UP y ROJO para DOWN de forma fija
     color = "#00ff88" if (is_sniper and trend=="UP") else ("#ff4b4b" if (is_sniper and trend=="DOWN") else "#00fbff")
     
     with cols[i % 3]:
@@ -123,7 +126,6 @@ for i, sym in enumerate(PAIRS):
             fillcolor=f'rgba({0 if trend=="UP" else 255}, {255 if trend=="UP" else 0}, 255, 0.15)',
             line=dict(color=color, width=3)
         ))
-        
         fig.update_layout(
             polar=dict(radialaxis=dict(visible=False, range=[0, 100]),
                 angularaxis=dict(tickfont=dict(size=11, color="#00fbff", family="Arial Black"), rotation=90),
@@ -135,7 +137,9 @@ for i, sym in enumerate(PAIRS):
 # --- BACKTESTING ---
 st.write("---")
 if os.path.exists(LOG_FILE):
-    log_df = pd.read_csv(LOG_FILE)
-    if not log_df.empty:
-        st.subheader(f"📊 Señales Detectadas ({len(log_df)})")
-        st.dataframe(log_df.tail(10).sort_values(by='timestamp', ascending=False), use_container_width=True)
+    try:
+        log_df = pd.read_csv(LOG_FILE)
+        if not log_df.empty:
+            st.subheader(f"📊 Señales Detectadas ({len(log_df)})")
+            st.dataframe(log_df.tail(10).sort_values(by='timestamp', ascending=False), use_container_width=True)
+    except: pass
