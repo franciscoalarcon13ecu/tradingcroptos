@@ -7,35 +7,44 @@ PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "DOGEUSDT", "ADAUSDT"]
 LOG_FILE = "backtest_log.csv"
 
 st.set_page_config(page_title="QUANTUM SNIPER", layout="wide")
-st_autorefresh(interval=5000, key="quantum_v19")
+st_autorefresh(interval=5000, key="quantum_anti_block")
 
-# Crear log si no existe
 if not os.path.exists(LOG_FILE):
     pd.DataFrame(columns=["timestamp", "symbol", "price", "score", "trend", "clv", "cvd", "rsi", "vol", "mom"]).to_csv(LOG_FILE, index=False)
 
 def fetch_data(symbol):
-    try:
-        # Usamos api3 para evitar bloqueos en el link de internet
-        url = f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
-        res = requests.get(url, timeout=2).json()
-        df = pd.DataFrame(res).apply(pd.to_numeric)
-        
-        curr_price = df[4].iloc[-1]
-        v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
-        z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
-        score = 50 + (np.clip(abs(z_vol), 0, 2.5) * 15)
-        trend = "UP" if curr_price > df[1].iloc[-1] else "DOWN"
-        
-        # --- ESTO ES LO QUE HACE QUE LA TERMINAL SE MUEVA ---
-        now = datetime.now().strftime("%H:%M:%S")
-        print(f"[{now}] Sincronizando {symbol}: ${curr_price} | Score: {score:.1f}")
-        # ---------------------------------------------------
-
-        metrics = [round(score,1), round(50+(z_vol*10),1), 60, round(50+(abs(z_vol)*12),1), 85 if trend=="UP" else 15]
-        return curr_price, score, trend, metrics
-    except Exception as e:
-        print(f"❌ Error en {symbol}: {e}")
-        return 0.0, 50.0, "API WAIT", [50, 50, 50, 50, 50]
+    # Lista de endpoints para rotar si uno falla
+    endpoints = [
+        f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30",
+        f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30",
+        f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=30",
+        f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval=1m&limit=30"
+    ]
+    
+    for url in endpoints:
+        try:
+            res = requests.get(url, timeout=2)
+            if res.status_code == 200:
+                data = res.json()
+                df = pd.DataFrame(data).apply(pd.to_numeric)
+                
+                curr_price = df[4].iloc[-1]
+                v_smooth, v_mean = df[5].iloc[-3:].mean(), df[5].mean()
+                z_vol = (v_smooth - v_mean) / (df[5].std() + 1e-9)
+                score = 50 + (np.clip(abs(z_vol), 0, 2.5) * 15)
+                trend = "UP" if curr_price > df[1].iloc[-1] else "DOWN"
+                
+                # Reporte en terminal
+                print(f"✅ {symbol} OK con {url.split('/')[2]}")
+                
+                metrics = [round(score,1), round(50+(z_vol*10),1), 60, round(50+(abs(z_vol)*12),1), 85 if trend=="UP" else 15]
+                return curr_price, score, trend, metrics
+        except:
+            continue
+            
+    # Si todos los intentos fallan
+    print(f"❌ {symbol} BLOQUEADO EN TODAS LAS API")
+    return 0.0, 50.0, "BLOCK", [50, 50, 50, 50, 50]
 
 st.markdown("<h1 style='text-align:center; color:#00fbff;'>🏹 QUANTUM SNIPER LIVE</h1>", unsafe_allow_html=True)
 
@@ -55,7 +64,7 @@ for i, sym in enumerate(PAIRS):
         fig = go.Figure(go.Scatterpolar(r=metrics+[metrics[0]], theta=['SC','CVD','RSI','VOL','MOM','SC'], fill='toself', line=dict(color=color)))
         fig.update_layout(polar=dict(radialaxis=dict(visible=False, range=[0, 100]), angularaxis=dict(tickfont=dict(color="#00fbff", size=10), rotation=90), domain=dict(x=[0.15, 0.85], y=[0.15, 0.85])),
                           showlegend=False, height=250, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, width='stretch', key=f"web_{sym}_{i}")
+        st.plotly_chart(fig, width='stretch', key=f"rad_v20_{sym}")
 
 st.write("---")
 st.subheader("📊 Historial de Señales")
